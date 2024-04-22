@@ -1,0 +1,73 @@
+version: '3'
+dotenv: [ '.env' ]
+vars:
+  VERSION_FILE: 'version' # Файл с версией
+  IMAGE_NAME: 'trackrecords.gitlab.yandexcloud.net:5050/terminal/scan' # Имя образа
+#  BRANCH: # Ветка
+#    sh: git rev-parse --abbrev-ref HEAD
+  VER: # Текущая версия
+    sh: cat {{.VERSION_FILE}}
+  MAJOR_VER: '{{(.VER | split ".")._0}}' # Мажорная версия
+  MINOR_VER: '{{(.VER | split ".")._1}}' # Минорная версия
+  PATH_VER: '{{(.VER | split ".")._2}}' # Патч версия
+  VERSION_CURRENT: '{{.MAJOR_VER}}.{{.MINOR_VER}}.{{.PATH_VER}}' # Текущая версия
+  VERSION_MINOR: '{{.MAJOR_VER}}.{{add .MINOR_VER 1}}.0' # Новая минорная версия
+  VERSION_PATH: '{{.MAJOR_VER}}.{{.MINOR_VER}}.{{add .PATH_VER 1}}' # Новая патч версия
+  VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}' # Версия для сборки
+  HELM_IMAGE: 'dtzar/helm-kubectl' # Образ для helm
+  GF_INSTALL_PLUGINS: "vertamedia-clickhouse-datasource,grafana-clickhouse-datasource,marcusolsson-dynamictext-panel,yesoreyeram-infinity-datasource,ae3e-plotly-panel,gapit-htmlgraphics-panel,volkovlabs-echarts-panel,bilibala-echarts-panel,natel-plotly-panel"
+tasks:
+  up-version:
+    desc: Обновление версии
+    cmds:
+      - echo {{.VERSION}} > {{.VERSION_FILE}}
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+  git-fix:
+    desc: Фиксация версии скриптов и документации в удаленном репозитории
+    cmds:
+      - git add .
+      - git commit -m '{{if eq .CLI_ARGS ""}}{{.VERSION}} Фиксация {{now | date "2006-01-02 15:04:05"}}{{else}}{{.VERSION}} {{.CLI_ARGS}}{{end}}'
+      - git push origin {{.BRANCH}}
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+  git-fix-tag:
+    desc: Фиксация в git и создание тега
+    cmds:
+      - echo {{.VERSION}} > {{.VERSION_FILE}}
+      - git add .
+      - git commit -m '{{if eq .CLI_ARGS ""}}{{.VERSION}} Фиксация {{now | date "2006-01-02 15:04:05"}}{{else}}{{.VERSION}} {{.CLI_ARGS}}{{end}}'
+      - git tag {{.VERSION}}
+      - git push origin {{.BRANCH}}
+      - git push origin {{.VERSION}}
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+  build:
+    desc: Сборка docker образа
+    cmds:
+      - docker build --build-arg "GF_INSTALL_PLUGINS={{.GF_INSTALL_PLUGINS}}" -t {{.IMAGE_NAME}}:{{.VERSION}} -t {{.IMAGE_NAME}}:latest .
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+  push:
+    desc: Отправка docker образа в репозиторий
+    cmds:
+      - docker push {{.IMAGE_NAME}}:{{.VERSION}}
+      - docker push {{.IMAGE_NAME}}:latest
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+  deploy-staging:
+    desc: Деплой на staging
+    deps:
+      - use-stage
+    vars:
+      VERSION: '{{if eq .CLI_ARGS ""}}{{.VERSION_PATH}}{{else}}{{.VERSION_MINOR}}{{end}}'
+    cmds:
+      - { task: up-version }
+      - { task: build }
+      - { task: push }
+      - { task: git-fix-tag }
+  use-stage:
+    desc: Использование образа на staging
+    cmds:
+      - kubectl config use-context {{.STAGE_CLASTER_NAME}}
+
